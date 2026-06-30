@@ -80,6 +80,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.28.1](https://github.com/headroomlabs-ai/headroom/compare/v0.28.0...v0.28.1) (2026-06-30)
+
+
+### Bug Fixes
+
+* **learn:** aggregate verbosity baselines across projects instead of overwriting ([#1288](https://github.com/headroomlabs-ai/headroom/issues/1288)) ([27a5468](https://github.com/headroomlabs-ai/headroom/commit/27a546834960b349e710a0b2e86ca3471523f34d))
+* **mcp:** show lifetime totals and label rolling session scope in headroom_stats ([#1428](https://github.com/headroomlabs-ai/headroom/issues/1428)) ([1c0e152](https://github.com/headroomlabs-ai/headroom/commit/1c0e15243eda8f2dc868fe9ed4a08d944893686b))
+* **opencode:** route native providers + load transport plugin, fix Serena context ([#1573](https://github.com/headroomlabs-ai/headroom/issues/1573)) ([ad0034f](https://github.com/headroomlabs-ai/headroom/commit/ad0034f98191501c1a60d26383bc3ed9f6d532be))
+* preserve anthropic passthrough tool order ([#1427](https://github.com/headroomlabs-ai/headroom/issues/1427)) ([a932247](https://github.com/headroomlabs-ai/headroom/commit/a9322477e33ec2c5ccd6442d3f72c17b7388c9e0))
+
 ## [0.28.0](https://github.com/headroomlabs-ai/headroom/compare/v0.27.0...v0.28.0) (2026-06-29)
 
 
