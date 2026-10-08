@@ -1400,9 +1400,9 @@ def _locked_file(lock_file: Any) -> Any:
             import msvcrt
 
             # msvcrt.locking operates on bytes from the current file position.
-            lock_file.seek(0)
-            if lock_file.read(1) == b"":
-                lock_file.seek(0)
+            # Reading the locked byte fails on Windows before a competing
+            # writer can enter the retry loop. Check metadata instead.
+            if os.fstat(lock_file.fileno()).st_size == 0:
                 lock_file.write(b"0")
                 lock_file.flush()
             lock_file.seek(0)
@@ -1728,33 +1728,41 @@ def _check_and_clear_stale_wrap_marker(settings_path: Path, *, key: str) -> str 
     Called before writing a fresh base_url entry so a crashed wrap session's
     leftover doesn't get treated as this session's own state to restore later.
     """
+    # Preserve the default no-marker path without creating lock artifacts.
     marker = _read_wrap_marker(settings_path)
     if marker is None or marker.get("key") != key or not _wrap_marker_is_stale(marker):
         return None
-    port = marker.get("port")
-    if not isinstance(port, int) or isinstance(port, bool):
-        return None
-    expected_url = f"http://127.0.0.1:{port}"
-    if key == "ANTHROPIC_FOUNDRY_BASE_URL":
-        expected_url = _foundry_proxy_url(expected_url)
-    try:
-        settings = json.loads(_read_text(settings_path))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return None
-    env_settings = settings.get("env") if isinstance(settings, dict) else None
-    current_url = env_settings.get(key) if isinstance(env_settings, dict) else None
-    if current_url != expected_url:
-        # The user (or a newer session) has replaced the crashed writer's URL.
-        # Retire its stale marker without changing the current settings.
-        _clear_wrap_marker(settings_path, key=key)
-        return None
-    previous = marker.get("previous")
-    click.echo(
-        f"headroom: clearing stale {key} left by crashed wrap session (pid {marker.get('pid')})",
-        err=True,
-    )
-    _restore_claude_wrap_base_url(previous, settings_path=settings_path, _key_override=key)
-    return previous
+    with _wrap_settings_lock(settings_path):
+        marker = _read_wrap_marker(settings_path)
+        if marker is None or marker.get("key") != key or not _wrap_marker_is_stale(marker):
+            return None
+        port = marker.get("port")
+        if not isinstance(port, int) or isinstance(port, bool):
+            return None
+        expected_url = f"http://127.0.0.1:{port}"
+        if key == "ANTHROPIC_FOUNDRY_BASE_URL":
+            expected_url = _foundry_proxy_url(expected_url)
+        try:
+            settings = json.loads(_read_text(settings_path))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return None
+        env_settings = settings.get("env") if isinstance(settings, dict) else None
+        current_url = env_settings.get(key) if isinstance(env_settings, dict) else None
+        if current_url != expected_url:
+            # The user (or a newer session) has replaced the crashed writer's URL.
+            # Retire its stale marker without changing the current settings.
+            if _read_wrap_marker(settings_path) == marker:
+                _clear_wrap_marker(settings_path, key=key)
+            return None
+        previous = marker.get("previous")
+        click.echo(
+            f"headroom: clearing stale {key} left by crashed wrap session (pid {marker.get('pid')})",
+            err=True,
+        )
+        _restore_claude_wrap_base_url(
+            previous, settings_path=settings_path, _key_override=key, _lock_held=True
+        )
+        return previous
 
 
 def _check_and_clear_dead_wrap_marker(settings_path: Path, *, key: str) -> str | None:
@@ -2058,6 +2066,7 @@ def _restore_claude_wrap_base_url(
     _key_override: str | None = None,
     force: bool = False,
     dead_ports: frozenset[int] = frozenset(),
+    _lock_held: bool = False,
 ) -> None:
     """Restore (or remove) the env key written by _write_claude_wrap_base_url.
 
@@ -2073,11 +2082,13 @@ def _restore_claude_wrap_base_url(
     (``unwrap``), and ``dead_ports`` to name proxy ports already proven dead so
     holders that outlived their proxy stop counting as live.
     """
+    from contextlib import nullcontext
+
     path = settings_path or (Path.cwd() / ".claude" / "settings.local.json")
     key = _key_override or _claude_wrap_base_url_env_key(
         foundry_mode=foundry_mode, vertex_mode=vertex_mode
     )
-    with _wrap_settings_lock(path):
+    with nullcontext() if _lock_held else _wrap_settings_lock(path):
         # Another live wrap session in this project may still be using the key.
         # Restoring underneath it silently unroutes a running session -- traffic
         # bypasses the proxy with no error anywhere (#3205).

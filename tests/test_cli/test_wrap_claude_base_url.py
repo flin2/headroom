@@ -555,3 +555,66 @@ def test_stale_marker_preserves_manually_repaired_url(tmp_path, foundry_mode, ve
     wrap_cli._check_and_clear_stale_wrap_marker(path, key=key)
     assert path.read_bytes() == before
     assert not marker_path.exists()
+
+
+def test_stale_recovery_serializes_with_new_wrap_writer(tmp_path, monkeypatch):
+    import threading
+
+    path = _settings(tmp_path)
+    path.parent.mkdir(parents=True)
+    wrap_cli._write_claude_wrap_base_url("http://127.0.0.1:9200", settings_path=path, port=9200)
+    marker_path = wrap_cli._wrap_marker_path(path)
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["pid"] = 999_999_999
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+    path.write_text('{"env":{"ANTHROPIC_BASE_URL":"https://repaired.example"}}', encoding="utf-8")
+    compared = threading.Event()
+    resume = threading.Event()
+    writer_done = threading.Event()
+    errors = []
+    read_text = wrap_cli._read_text
+
+    def paused_read(target):
+        content = read_text(target)
+        if threading.current_thread().name == "stale-recovery" and target == path:
+            compared.set()
+            assert resume.wait(5)
+        return content
+
+    def recover():
+        try:
+            wrap_cli._check_and_clear_stale_wrap_marker(path, key="ANTHROPIC_BASE_URL")
+        except BaseException as exc:
+            errors.append(exc)
+
+    def write_new():
+        try:
+            wrap_cli._write_claude_wrap_base_url(
+                "http://127.0.0.1:9300", settings_path=path, port=9300
+            )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            writer_done.set()
+
+    monkeypatch.setattr(wrap_cli, "_read_text", paused_read)
+    recovery = threading.Thread(target=recover, name="stale-recovery")
+    writer = threading.Thread(target=write_new, name="new-writer")
+    recovery.start()
+    try:
+        assert compared.wait(5)
+        writer.start()
+        # Give the competing actual writer the opportunity to commit its marker.
+        writer_done.wait(0.2)
+    finally:
+        resume.set()
+        recovery.join(5)
+        if writer.ident is not None:
+            writer.join(5)
+    assert not recovery.is_alive() and not writer.is_alive()
+    assert not errors, errors
+    assert json.loads(marker_path.read_text(encoding="utf-8"))["port"] == 9300
+    assert (
+        json.loads(path.read_text(encoding="utf-8"))["env"]["ANTHROPIC_BASE_URL"]
+        == "http://127.0.0.1:9300"
+    )
