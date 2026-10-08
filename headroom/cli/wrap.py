@@ -6222,8 +6222,8 @@ def claude(
             # Issue #2221: pair the marker just written with a reader. wrap installs
             # no hook of its own, so a session that only ran `wrap` (never `init`)
             # had nothing to clear a dead-proxy base_url. SessionStart-only.
-            _ensure_claude_wrap_selfheal_hook(_wrap_settings_path)
             _wrote_project_settings[0] = True
+            _ensure_claude_wrap_selfheal_hook(_wrap_settings_path)
         elif verbose:
             skip_reason = _claude_project_settings_skip_reason()
             click.echo(

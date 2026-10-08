@@ -15,6 +15,45 @@ from headroom.cli import wrap as wrap_cli
 from headroom.cli.main import main
 
 
+def test_project_settings_are_restored_when_selfheal_install_fails(tmp_path: Path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=str(tmp_path)):
+        settings_path = Path(".claude/settings.local.json")
+        settings_path.parent.mkdir()
+        original = {
+            "env": {"ANTHROPIC_BASE_URL": "https://user.example", "KEEP": "1"},
+            "permissions": {"allow": ["Read"]},
+        }
+        settings_path.write_text(json.dumps(original), encoding="utf-8")
+        with (
+            patch("headroom.cli.wrap.shutil.which", return_value="claude"),
+            patch("headroom.cli.wrap._ensure_proxy", return_value=(None, 8787)),
+            patch("headroom.cli.wrap._setup_headroom_mcp"),
+            patch("headroom.cli.wrap._setup_coding_compressor"),
+            patch(
+                "headroom.cli.wrap._ensure_claude_wrap_selfheal_hook",
+                side_effect=RuntimeError("selfheal install failed"),
+            ),
+            patch("headroom.cli.wrap.subprocess.run") as run_mock,
+        ):
+            result = runner.invoke(
+                main,
+                [
+                    "wrap",
+                    "claude",
+                    "--project-settings",
+                    "--no-mcp",
+                    "--no-tokensave",
+                    "--no-serena",
+                ],
+            )
+        assert result.exit_code != 0
+        assert "selfheal install failed" in str(result.exception) + result.output
+        assert all(call.args[0] == ["claude", "--version"] for call in run_mock.call_args_list)
+        assert json.loads(settings_path.read_text(encoding="utf-8")) == original
+        assert not settings_path.with_name(".headroom_wrap_settings.json").exists()
+
+
 def _settings(tmp_path: Path) -> Path:
     return tmp_path / ".claude" / "settings.json"
 
