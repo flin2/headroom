@@ -6191,21 +6191,18 @@ def claude(
         else:
             env["ANTHROPIC_BASE_URL"] = proxy_url
 
-        # Project-local settings are opt-in because synced checkouts can carry
-        # stale localhost proxy URLs to machines without Headroom (#1599). When
-        # enabled, keep main's stale-marker cleanup so crashed wrap sessions do
-        # not leave .claude/settings.local.json pinned to a dead proxy.
+        # Recover an older crashed wrap even when new project settings writes
+        # are disabled. The marker records the prior value to restore; without
+        # one, default wraps leave project settings untouched (#1599).
         _settings_vertex[0] = bool(use_vertex)
         _settings_foundry[0] = bool(foundry_upstream) and not _settings_vertex[0]
+        _check_and_clear_stale_wrap_marker(
+            _wrap_settings_path,
+            key=_claude_wrap_base_url_env_key(
+                foundry_mode=_settings_foundry[0], vertex_mode=_settings_vertex[0]
+            ),
+        )
         if _claude_project_settings_enabled(project_settings):
-            # _wrap_settings_path is bound before the try (above) so the finally is
-            # always safe; the value is unchanged here.
-            _check_and_clear_stale_wrap_marker(
-                _wrap_settings_path,
-                key=_claude_wrap_base_url_env_key(
-                    foundry_mode=_settings_foundry[0], vertex_mode=_settings_vertex[0]
-                ),
-            )
             _saved_base_url[0] = _write_claude_wrap_base_url(
                 (
                     _foundry_proxy_url(proxy_url)

@@ -501,3 +501,33 @@ def test_check_and_clear_stale_wrap_marker_leaves_live_marker(tmp_path: Path) ->
 def test_check_and_clear_stale_wrap_marker_noop_when_no_marker(tmp_path: Path) -> None:
     path = _settings(tmp_path)
     assert wrap_cli._check_and_clear_stale_wrap_marker(path, key="ANTHROPIC_BASE_URL") is None
+
+
+def test_default_wrap_recovers_settings_from_old_crashed_wrap(tmp_path, monkeypatch):
+    monkeypatch.delenv("HEADROOM_CLAUDE_PROJECT_SETTINGS", raising=False)
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=str(tmp_path)):
+        path = Path(".claude/settings.local.json")
+        path.parent.mkdir()
+        original = {"env": {"ANTHROPIC_BASE_URL": "https://direct.example", "KEEP": "1"}}
+        path.write_text(json.dumps(original), encoding="utf-8")
+        wrap_cli._write_claude_wrap_base_url("http://127.0.0.1:9200", settings_path=path, port=9200)
+        marker_path = wrap_cli._wrap_marker_path(path)
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        marker["pid"] = 999_999_999
+        marker_path.write_text(json.dumps(marker), encoding="utf-8")
+        with (
+            patch("headroom.cli.wrap.shutil.which", return_value="claude"),
+            patch("headroom.cli.wrap._ensure_proxy", return_value=(None, 8787)),
+            patch("headroom.cli.wrap._setup_headroom_mcp", return_value=None),
+            patch("headroom.cli.wrap._setup_coding_compressor", return_value=None),
+            patch("headroom.cli.wrap._ensure_claude_wrap_selfheal_hook") as install_hook,
+            patch("headroom.cli.wrap.subprocess.run", return_value=SimpleNamespace(returncode=0)),
+        ):
+            result = runner.invoke(
+                main, ["wrap", "claude", "--no-mcp", "--no-tokensave", "--no-serena"]
+            )
+        assert result.exit_code == 0, result.output
+        assert json.loads(path.read_text(encoding="utf-8")) == original
+        assert not marker_path.exists()
+        install_hook.assert_not_called()
