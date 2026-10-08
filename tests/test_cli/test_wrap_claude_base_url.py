@@ -476,9 +476,7 @@ def test_check_and_clear_stale_wrap_marker_restores_previous(tmp_path: Path) -> 
     path.write_text(
         json.dumps({"env": {"ANTHROPIC_BASE_URL": "http://old.proxy:9000"}}), encoding="utf-8"
     )
-    wrap_cli._write_wrap_marker(
-        path, port=8787, key="ANTHROPIC_BASE_URL", previous="http://old.proxy:9000"
-    )
+    wrap_cli._write_claude_wrap_base_url("http://127.0.0.1:8787", settings_path=path, port=8787)
     marker = json.loads(_marker(tmp_path).read_text(encoding="utf-8"))
     marker["pid"] = 999_999_999
     _marker(tmp_path).write_text(json.dumps(marker), encoding="utf-8")
@@ -531,3 +529,29 @@ def test_default_wrap_recovers_settings_from_old_crashed_wrap(tmp_path, monkeypa
         assert json.loads(path.read_text(encoding="utf-8")) == original
         assert not marker_path.exists()
         install_hook.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "foundry_mode, vertex_mode", [(False, False), (True, False), (False, True)]
+)
+def test_stale_marker_preserves_manually_repaired_url(tmp_path, foundry_mode, vertex_mode):
+    path = _settings(tmp_path)
+    path.parent.mkdir(parents=True)
+    key = wrap_cli._claude_wrap_base_url_env_key(foundry_mode=foundry_mode, vertex_mode=vertex_mode)
+    path.write_text(
+        json.dumps({"env": {key: "https://old.example", "KEEP": "1"}}), encoding="utf-8"
+    )
+    proxy = "http://127.0.0.1:9200/anthropic" if foundry_mode else "http://127.0.0.1:9200"
+    wrap_cli._write_claude_wrap_base_url(
+        proxy, settings_path=path, port=9200, foundry_mode=foundry_mode, vertex_mode=vertex_mode
+    )
+    marker_path = wrap_cli._wrap_marker_path(path)
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["pid"] = 999_999_999
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+    repaired = json.dumps({"env": {key: "https://new.example", "KEEP": "1"}}, indent=2) + "\n"
+    path.write_text(repaired, encoding="utf-8")
+    before = path.read_bytes()
+    wrap_cli._check_and_clear_stale_wrap_marker(path, key=key)
+    assert path.read_bytes() == before
+    assert not marker_path.exists()

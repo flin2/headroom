@@ -1731,6 +1731,23 @@ def _check_and_clear_stale_wrap_marker(settings_path: Path, *, key: str) -> str 
     marker = _read_wrap_marker(settings_path)
     if marker is None or marker.get("key") != key or not _wrap_marker_is_stale(marker):
         return None
+    port = marker.get("port")
+    if not isinstance(port, int) or isinstance(port, bool):
+        return None
+    expected_url = f"http://127.0.0.1:{port}"
+    if key == "ANTHROPIC_FOUNDRY_BASE_URL":
+        expected_url = _foundry_proxy_url(expected_url)
+    try:
+        settings = json.loads(_read_text(settings_path))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    env_settings = settings.get("env") if isinstance(settings, dict) else None
+    current_url = env_settings.get(key) if isinstance(env_settings, dict) else None
+    if current_url != expected_url:
+        # The user (or a newer session) has replaced the crashed writer's URL.
+        # Retire its stale marker without changing the current settings.
+        _clear_wrap_marker(settings_path, key=key)
+        return None
     previous = marker.get("previous")
     click.echo(
         f"headroom: clearing stale {key} left by crashed wrap session (pid {marker.get('pid')})",
